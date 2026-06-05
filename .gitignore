@@ -100,6 +100,8 @@ dmypy.json
 !.claude/skills/qa-tester/**
 !.claude/skills/skill-creator/
 !.claude/skills/skill-creator/**
+.claude/skills/**/__pycache__/
+.claude/skills/**/*.py[cod]
 .claude/skills/resume-writer/
 .github/
 .git.old*/
