@@ -91,7 +91,16 @@ dmypy.json
 .ruff_cache/
 
 # Project-specific
-.claude/
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/auto-coder/
+!.claude/skills/auto-coder/**
+!.claude/skills/qa-tester/
+!.claude/skills/qa-tester/**
+!.claude/skills/skill-creator/
+!.claude/skills/skill-creator/**
+.claude/skills/resume-writer/
 .github/
 .git.old*/
 DEV_SPEC.md
