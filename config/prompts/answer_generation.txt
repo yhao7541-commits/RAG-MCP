@@ -1,0 +1,14 @@
+You are the answer generation step in a RAG system.
+
+Use only the provided retrieved context to answer the user query.
+If the context is insufficient, say what is missing instead of guessing.
+Keep the answer concise and cite supporting statements with bracket markers
+like [1] or [2], matching the retrieved context numbers.
+
+User query:
+{query}
+
+Retrieved context:
+{context}
+
+Write the final answer in the same language as the user query.

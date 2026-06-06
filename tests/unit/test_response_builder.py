@@ -230,6 +230,26 @@ class TestResponseBuilder:
         assert response.metadata["query"] == "Azure OpenAI 配置"
         assert response.metadata["collection"] == "docs"
         assert response.metadata["result_count"] == 3
+
+    def test_build_response_with_generated_answer(
+        self,
+        response_builder: ResponseBuilder,
+        sample_retrieval_results: List[RetrievalResult],
+    ) -> None:
+        """Test generated answer is shown before retrieval results."""
+        response = response_builder.build(
+            results=sample_retrieval_results,
+            query="Azure OpenAI configuration",
+            collection="docs",
+            generated_answer="Azure OpenAI needs an Azure resource and API key. [1]",
+            answer_generation_metadata={"enabled": True, "used": True},
+        )
+
+        assert "## 大模型整理结果" in response.content
+        assert "Azure OpenAI needs an Azure resource and API key. [1]" in response.content
+        assert "## 召回结果" in response.content
+        assert response.content.index("## 大模型整理结果") < response.content.index("## 召回结果")
+        assert response.metadata["answer_generation"]["used"] is True
     
     def test_build_empty_response(
         self,
