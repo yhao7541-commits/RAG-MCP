@@ -73,6 +73,14 @@ rerank:
   top_k: 5
 
 # =============================================================================
+# Answer Generation Configuration
+# =============================================================================
+answer_generation:
+  enabled: true
+  prompt_path: "./config/prompts/answer_generation.txt"
+  max_context_chars: 6000
+
+# =============================================================================
 # Evaluation Configuration
 # =============================================================================
 evaluation:

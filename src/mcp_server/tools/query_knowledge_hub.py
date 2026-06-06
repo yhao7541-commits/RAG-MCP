@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from mcp import types
 
+from src.core.response.answer_synthesizer import AnswerSynthesizer, AnswerSynthesisResult
 from src.core.response.response_builder import ResponseBuilder, MCPToolResponse
 from src.core.settings import load_settings, resolve_path, Settings
 from src.core.trace import TraceContext, TraceCollector
@@ -109,6 +110,7 @@ class QueryKnowledgeHubTool:
         hybrid_search: Optional[HybridSearch] = None,
         reranker: Optional[CoreReranker] = None,
         response_builder: Optional[ResponseBuilder] = None,
+        answer_synthesizer: Optional[AnswerSynthesizer] = None,
     ) -> None:
         """Initialize QueryKnowledgeHubTool.
         
@@ -118,6 +120,7 @@ class QueryKnowledgeHubTool:
             hybrid_search: Optional pre-configured HybridSearch instance.
             reranker: Optional pre-configured CoreReranker instance.
             response_builder: Optional pre-configured ResponseBuilder instance.
+            answer_synthesizer: Optional AnswerSynthesizer instance.
         """
         self._settings = settings
         self.config = config or QueryKnowledgeHubConfig()
@@ -125,6 +128,7 @@ class QueryKnowledgeHubTool:
         self._reranker = reranker
         self._embedding_client = None
         self._response_builder = response_builder or ResponseBuilder()
+        self._answer_synthesizer = answer_synthesizer
         
         # Track initialization state
         self._initialized = False
@@ -280,12 +284,26 @@ class QueryKnowledgeHubTool:
                 results = await asyncio.to_thread(
                     self._apply_rerank, query, results, effective_top_k, trace,
                 )
+
+            generated_answer = None
+            answer_generation_metadata = None
+            if self._is_answer_generation_enabled() and results:
+                synthesis_result = await asyncio.to_thread(
+                    self._synthesize_answer, query, results, trace,
+                )
+                generated_answer = synthesis_result.answer
+                answer_generation_metadata = {
+                    "enabled": True,
+                    **synthesis_result.to_metadata(),
+                }
             
             # Build response
             response = self._response_builder.build(
                 results=results,
                 query=query,
                 collection=effective_collection,
+                generated_answer=generated_answer,
+                answer_generation_metadata=answer_generation_metadata,
             )
             
             # Store final results in trace for dashboard display
@@ -369,7 +387,7 @@ class QueryKnowledgeHubTool:
         """
         if self._reranker is None or not self._reranker.is_enabled:
             return results[:top_k]
-        
+
         try:
             rerank_result = self._reranker.rerank(
                 query=query,
@@ -377,16 +395,49 @@ class QueryKnowledgeHubTool:
                 top_k=top_k,
                 trace=trace,
             )
-            
+
             if rerank_result.used_fallback:
                 logger.warning(
                     f"Reranker fallback: {rerank_result.fallback_reason}"
                 )
-            
+
             return rerank_result.results
         except Exception as e:
             logger.warning(f"Reranking failed, using original order: {e}")
             return results[:top_k]
+
+    def _is_answer_generation_enabled(self) -> bool:
+        config = getattr(self.settings, "answer_generation", None)
+        return bool(getattr(config, "enabled", False))
+
+    def _get_answer_synthesizer(self) -> AnswerSynthesizer:
+        if self._answer_synthesizer is None:
+            config = getattr(self.settings, "answer_generation", None)
+            self._answer_synthesizer = AnswerSynthesizer(
+                settings=self.settings,
+                prompt_path=getattr(
+                    config,
+                    "prompt_path",
+                    "./config/prompts/answer_generation.txt",
+                ),
+                max_context_chars=getattr(config, "max_context_chars", 6000),
+            )
+        return self._answer_synthesizer
+
+    def _synthesize_answer(
+        self,
+        query: str,
+        results: List[RetrievalResult],
+        trace: Optional[Any] = None,
+    ) -> AnswerSynthesisResult:
+        synthesizer = self._get_answer_synthesizer()
+        result = synthesizer.synthesize(query=query, results=results, trace=trace)
+        if trace:
+            trace.record_stage(
+                "answer_generation",
+                result.to_metadata(),
+            )
+        return result
     
     def _build_error_response(
         self,
@@ -404,7 +455,7 @@ class QueryKnowledgeHubTool:
         Returns:
             MCPToolResponse indicating error.
         """
-        content = f"## 查询失败\n\n"
+        content = "## 查询失败\n\n"
         content += f"查询: **{query}**\n"
         content += f"集合: `{collection}`\n\n"
         content += f"**错误信息:** {error_message}\n\n"
@@ -500,7 +551,7 @@ async def query_knowledge_hub_handler(
             content=[
                 types.TextContent(
                     type="text",
-                    text=f"内部错误: 查询处理失败",
+                    text="内部错误: 查询处理失败",
                 )
             ],
             isError=True,

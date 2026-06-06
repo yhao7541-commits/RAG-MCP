@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -140,6 +140,13 @@ class RerankSettings:
 
 
 @dataclass(frozen=True)
+class AnswerGenerationSettings:
+    enabled: bool = False
+    prompt_path: str = "./config/prompts/answer_generation.txt"
+    max_context_chars: int = 6000
+
+
+@dataclass(frozen=True)
 class EvaluationSettings:
     enabled: bool
     provider: str
@@ -188,6 +195,9 @@ class Settings:
     observability: ObservabilitySettings
     ingestion: Optional[IngestionSettings] = None
     vision_llm: Optional[VisionLLMSettings] = None
+    answer_generation: AnswerGenerationSettings = field(
+        default_factory=AnswerGenerationSettings
+    )
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Settings":
@@ -201,6 +211,9 @@ class Settings:
         rerank = _require_mapping(data, "rerank", "settings")
         evaluation = _require_mapping(data, "evaluation", "settings")
         observability = _require_mapping(data, "observability", "settings")
+        answer_generation = data.get("answer_generation")
+        if answer_generation is not None and not isinstance(answer_generation, dict):
+            raise SettingsError("Expected mapping for field: settings.answer_generation")
 
         ingestion_settings = None
         if "ingestion" in data:
@@ -227,6 +240,19 @@ class Settings:
                 azure_endpoint=vision_llm.get("azure_endpoint"),
                 deployment_name=vision_llm.get("deployment_name"),
                 base_url=vision_llm.get("base_url"),
+            )
+
+        answer_generation_settings = AnswerGenerationSettings()
+        if answer_generation:
+            answer_generation_settings = AnswerGenerationSettings(
+                enabled=bool(answer_generation.get("enabled", False)),
+                prompt_path=str(
+                    answer_generation.get(
+                        "prompt_path",
+                        "./config/prompts/answer_generation.txt",
+                    )
+                ),
+                max_context_chars=int(answer_generation.get("max_context_chars", 6000)),
             )
 
         settings = cls(
@@ -268,6 +294,7 @@ class Settings:
                 model=_require_str(rerank, "model", "rerank"),
                 top_k=_require_int(rerank, "top_k", "rerank"),
             ),
+            answer_generation=answer_generation_settings,
             evaluation=EvaluationSettings(
                 enabled=_require_bool(evaluation, "enabled", "evaluation"),
                 provider=_require_str(evaluation, "provider", "evaluation"),

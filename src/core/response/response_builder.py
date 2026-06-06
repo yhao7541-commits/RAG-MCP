@@ -10,12 +10,15 @@ This module builds structured responses for MCP tools, combining:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union
 
 from mcp import types
 
 from src.core.response.citation_generator import Citation, CitationGenerator
 from src.core.types import RetrievalResult
+
+if TYPE_CHECKING:
+    from src.core.response.multimodal_assembler import MultimodalAssembler
 
 
 @dataclass
@@ -156,6 +159,8 @@ class ResponseBuilder:
         query: str,
         collection: Optional[str] = None,
         include_images: bool = True,
+        generated_answer: Optional[str] = None,
+        answer_generation_metadata: Optional[Dict[str, Any]] = None,
     ) -> MCPToolResponse:
         """Build MCP response from retrieval results.
         
@@ -164,6 +169,10 @@ class ResponseBuilder:
             query: Original user query.
             collection: Optional collection name.
             include_images: Whether to include images in response (default: True).
+            generated_answer: Optional LLM-synthesized answer to show before
+                retrieval snippets.
+            answer_generation_metadata: Optional metadata about the synthesis
+                stage, including fallback status.
             
         Returns:
             MCPToolResponse with formatted content, citations, and optional images.
@@ -177,9 +186,13 @@ class ResponseBuilder:
         
         # Build Markdown content
         content = self._build_markdown_content(results, citations, query)
+        if generated_answer:
+            content = self._build_answer_content(generated_answer, content)
         
         # Build metadata
         metadata = self._build_metadata(query, collection, len(results))
+        if answer_generation_metadata is not None:
+            metadata["answer_generation"] = answer_generation_metadata
         
         # Assemble image content if enabled
         image_contents: List[types.ImageContent] = []
@@ -216,7 +229,7 @@ class ResponseBuilder:
         Returns:
             MCPToolResponse indicating no results found.
         """
-        content = f"## 未找到相关结果\n\n"
+        content = "## 未找到相关结果\n\n"
         content += f"查询: **{query}**\n\n"
         
         if collection:
@@ -257,7 +270,7 @@ class ResponseBuilder:
         lines = []
         
         # Header
-        lines.append(f"## 检索结果\n")
+        lines.append("## 检索结果\n")
         lines.append(f"针对查询 **\"{query}\"** 找到 {len(results)} 条相关结果:\n")
         
         # Results section
@@ -294,6 +307,20 @@ class ResponseBuilder:
             lines.append(f"- [{citation.index}] {source_info}")
         
         return "\n".join(lines)
+
+    def _build_answer_content(self, generated_answer: str, retrieval_content: str) -> str:
+        """Combine generated answer with the existing retrieval-result content."""
+        return "\n".join(
+            [
+                "## 大模型整理结果",
+                "",
+                generated_answer.strip(),
+                "",
+                "---",
+                "",
+                retrieval_content.replace("## 检索结果", "## 召回结果", 1),
+            ]
+        )
     
     def _build_metadata(
         self,
