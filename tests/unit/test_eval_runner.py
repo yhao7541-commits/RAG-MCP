@@ -38,6 +38,29 @@ class StubEvaluator(BaseEvaluator):
         return {"hit_rate": 1.0, "mrr": 0.5}
 
 
+class RecordingEvaluator(BaseEvaluator):
+    """Evaluator that records inputs passed by EvalRunner."""
+
+    def __init__(self) -> None:
+        self.calls: List[Dict[str, Any]] = []
+
+    def evaluate(
+        self,
+        query: str,
+        retrieved_chunks: List[Any],
+        generated_answer: Optional[str] = None,
+        ground_truth: Optional[Any] = None,
+        trace: Optional[Any] = None,
+        **kwargs: Any,
+    ) -> Dict[str, float]:
+        self.calls.append({
+            "query": query,
+            "ground_truth": ground_truth,
+            "kwargs": kwargs,
+        })
+        return {"context_recall": 1.0}
+
+
 def _write_golden_json(path: Path, test_cases: List[Dict]) -> None:
     data = {"test_cases": test_cases}
     path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
@@ -165,6 +188,32 @@ class TestEvalRunner:
         report = runner.run(f)
 
         assert "Generated answer for: Q" == report.query_results[0].generated_answer
+
+    def test_run_passes_reference_answer_to_evaluator_kwargs(self, tmp_path: Path) -> None:
+        f = tmp_path / "g.json"
+        _write_golden_json(f, [{
+            "query": "RAG",
+            "expected_chunk_ids": ["c1"],
+            "reference_answer": "Reference answer.",
+        }])
+
+        mock_search = MagicMock()
+        mock_search.search.return_value = [
+            MagicMock(chunk_id="c1", text="RAG is...", score=0.9),
+        ]
+        evaluator = RecordingEvaluator()
+
+        runner = EvalRunner(
+            hybrid_search=mock_search,
+            evaluator=evaluator,
+        )
+        runner.run(f)
+
+        assert evaluator.calls == [{
+            "query": "RAG",
+            "ground_truth": {"ids": ["c1"]},
+            "kwargs": {"reference_answer": "Reference answer."},
+        }]
 
     def test_report_to_dict(self, tmp_path: Path) -> None:
         f = tmp_path / "g.json"

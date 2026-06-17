@@ -24,8 +24,14 @@ logger = logging.getLogger(__name__)
 FAITHFULNESS = "faithfulness"
 ANSWER_RELEVANCY = "answer_relevancy"
 CONTEXT_PRECISION = "context_precision"
+CONTEXT_RECALL = "context_recall"
 
-SUPPORTED_METRICS = {FAITHFULNESS, ANSWER_RELEVANCY, CONTEXT_PRECISION}
+SUPPORTED_METRICS = {
+    FAITHFULNESS,
+    ANSWER_RELEVANCY,
+    CONTEXT_PRECISION,
+    CONTEXT_RECALL,
+}
 
 
 def _import_ragas() -> None:
@@ -49,6 +55,7 @@ class RagasEvaluator(BaseEvaluator):
         - faithfulness: Measures factual consistency with context.
         - answer_relevancy: Measures how relevant the answer is to the query.
         - context_precision: Measures relevance/ordering of retrieved chunks.
+        - context_recall: Measures whether retrieved chunks cover the reference answer.
 
     Example::
 
@@ -116,7 +123,7 @@ class RagasEvaluator(BaseEvaluator):
             query: The user query string.
             retrieved_chunks: Retrieved chunks (dicts with 'text' key or strings).
             generated_answer: The generated answer text. Required for Ragas.
-            ground_truth: Ignored by Ragas (not needed for LLM-as-Judge).
+            ground_truth: Optional reference answer for metrics that require it.
             trace: Optional TraceContext for observability.
             **kwargs: Additional parameters.
 
@@ -136,9 +143,20 @@ class RagasEvaluator(BaseEvaluator):
             )
 
         contexts = self._extract_texts(retrieved_chunks)
+        reference_answer = self._extract_reference_answer(
+            ground_truth=ground_truth,
+            explicit_reference=kwargs.get("reference_answer") or kwargs.get("reference"),
+        )
+        if CONTEXT_RECALL in self._metric_names and not reference_answer:
+            raise ValueError(
+                "Ragas context_recall requires a non-empty 'reference_answer'. "
+                "Add reference_answer to the golden test set or pass it explicitly."
+            )
 
         try:
-            result = self._run_ragas(query, contexts, generated_answer)
+            result = self._run_ragas(
+                query, contexts, generated_answer, reference_answer,
+            )
         except Exception as exc:
             logger.error("Ragas evaluation failed: %s", exc, exc_info=True)
             raise RuntimeError(f"Ragas evaluation failed: {exc}") from exc
@@ -152,6 +170,7 @@ class RagasEvaluator(BaseEvaluator):
         query: str,
         contexts: List[str],
         answer: str,
+        reference_answer: Optional[str] = None,
     ) -> Dict[str, float]:
         """Execute Ragas collections metrics and return normalised scores.
 
@@ -159,11 +178,13 @@ class RagasEvaluator(BaseEvaluator):
         the legacy ``evaluate()`` pipeline.  Each metric has its own signature:
         - Faithfulness / ContextPrecision: (user_input, response, retrieved_contexts)
         - AnswerRelevancy: (user_input, response)
+        - ContextRecall: (user_input, retrieved_contexts, reference)
         """
         from ragas.metrics.collections import (
             Faithfulness,
             AnswerRelevancy,
             ContextPrecisionWithoutReference,
+            ContextRecall,
         )
 
         # Build LLM / Embedding wrappers from settings
@@ -184,6 +205,17 @@ class RagasEvaluator(BaseEvaluator):
                 m = ContextPrecisionWithoutReference(llm=llm)
                 result = m.score(
                     user_input=query, response=answer, retrieved_contexts=contexts,
+                )
+            elif metric_name == CONTEXT_RECALL:
+                if not reference_answer:
+                    raise ValueError(
+                        "context_recall requires a non-empty reference_answer"
+                    )
+                m = ContextRecall(llm=llm)
+                result = m.score(
+                    user_input=query,
+                    retrieved_contexts=contexts,
+                    reference=reference_answer,
                 )
             else:
                 continue
@@ -227,7 +259,10 @@ class RagasEvaluator(BaseEvaluator):
                 api_version=getattr(llm_cfg, "api_version", None) or "2024-02-15-preview",
             )
         elif provider == "openai":
-            llm_client = AsyncOpenAI(api_key=llm_cfg.api_key)
+            llm_kwargs = {"api_key": llm_cfg.api_key}
+            if getattr(llm_cfg, "base_url", None):
+                llm_kwargs["base_url"] = llm_cfg.base_url
+            llm_client = AsyncOpenAI(**llm_kwargs)
         else:
             raise ValueError(
                 f"Unsupported LLM provider for Ragas: '{provider}'. "
@@ -254,7 +289,10 @@ class RagasEvaluator(BaseEvaluator):
                 api_version=getattr(emb_cfg, "api_version", None) or "2024-02-15-preview",
             )
         elif emb_provider == "openai":
-            emb_client = AsyncOpenAI(api_key=emb_cfg.api_key)
+            emb_kwargs = {"api_key": emb_cfg.api_key}
+            if getattr(emb_cfg, "base_url", None):
+                emb_kwargs["base_url"] = emb_cfg.base_url
+            emb_client = AsyncOpenAI(**emb_kwargs)
         else:
             raise ValueError(
                 f"Unsupported embedding provider for Ragas: '{emb_provider}'. "
@@ -286,6 +324,30 @@ class RagasEvaluator(BaseEvaluator):
             else:
                 texts.append(str(chunk))
         return texts
+
+    def _extract_reference_answer(
+        self,
+        ground_truth: Optional[Any],
+        explicit_reference: Optional[Any] = None,
+    ) -> Optional[str]:
+        """Extract a reference answer for metrics such as context_recall."""
+        if explicit_reference is not None:
+            reference = str(explicit_reference).strip()
+            return reference or None
+
+        if isinstance(ground_truth, str):
+            reference = ground_truth.strip()
+            return reference or None
+
+        if isinstance(ground_truth, dict):
+            for key in ("reference_answer", "reference", "answer"):
+                value = ground_truth.get(key)
+                if value is not None:
+                    reference = str(value).strip()
+                    if reference:
+                        return reference
+
+        return None
 
     def _metrics_from_settings(self, settings: Any) -> List[str]:
         """Extract metrics list from settings if available."""

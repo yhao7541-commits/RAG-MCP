@@ -29,6 +29,7 @@ class TestRagasEvaluatorInit:
         assert set(evaluator._metric_names) == {
             "answer_relevancy",
             "context_precision",
+            "context_recall",
             "faithfulness",
         }
 
@@ -37,6 +38,12 @@ class TestRagasEvaluatorInit:
 
         evaluator = RagasEvaluator(metrics=["faithfulness"])
         assert evaluator._metric_names == ["faithfulness"]
+
+    def test_init_context_recall_metric(self) -> None:
+        from src.observability.evaluation.ragas_evaluator import RagasEvaluator
+
+        evaluator = RagasEvaluator(metrics=["context_recall"])
+        assert evaluator._metric_names == ["context_recall"]
 
     def test_init_unsupported_metric_raises(self) -> None:
         from src.observability.evaluation.ragas_evaluator import RagasEvaluator
@@ -48,19 +55,25 @@ class TestRagasEvaluatorInit:
         from src.observability.evaluation.ragas_evaluator import RagasEvaluator
 
         settings = MagicMock()
-        settings.evaluation.metrics = ["faithfulness", "answer_relevancy", "hit_rate"]
+        settings.evaluation.metrics = [
+            "context_recall",
+            "context_precision",
+            "answer_relevancy",
+            "hit_rate",
+        ]
 
         evaluator = RagasEvaluator(settings=settings)
         # hit_rate is not a ragas metric, should be filtered out
         assert "hit_rate" not in evaluator._metric_names
-        assert "faithfulness" in evaluator._metric_names
+        assert "context_recall" in evaluator._metric_names
+        assert "context_precision" in evaluator._metric_names
         assert "answer_relevancy" in evaluator._metric_names
 
     def test_init_no_settings_defaults_to_all(self) -> None:
         from src.observability.evaluation.ragas_evaluator import RagasEvaluator
 
         evaluator = RagasEvaluator(settings=None, metrics=None)
-        assert len(evaluator._metric_names) == 3
+        assert len(evaluator._metric_names) == 4
 
 
 class TestRagasImportCheck:
@@ -104,6 +117,13 @@ class TestRagasEvaluatorValidation:
         evaluator = RagasEvaluator(metrics=["faithfulness"])
         with pytest.raises(ValueError, match="generated_answer"):
             evaluator.evaluate("query", [{"text": "ctx"}], generated_answer="   ")
+
+    def test_context_recall_requires_reference_answer(self) -> None:
+        from src.observability.evaluation.ragas_evaluator import RagasEvaluator
+
+        evaluator = RagasEvaluator(metrics=["context_recall"])
+        with pytest.raises(ValueError, match="reference_answer"):
+            evaluator.evaluate("query", [{"text": "ctx"}], generated_answer="ans")
 
 
 class TestRagasEvaluatorTextExtraction:
@@ -185,6 +205,62 @@ class TestRagasEvaluatorEvaluate:
         assert result == expected_scores
         evaluator._run_ragas.assert_called_once()
 
+    def test_evaluate_passes_reference_answer_to_ragas(self) -> None:
+        from src.observability.evaluation.ragas_evaluator import RagasEvaluator
+
+        evaluator = RagasEvaluator(metrics=["context_recall"])
+        expected = {"context_recall": 0.75}
+        evaluator._run_ragas = MagicMock(return_value=expected)  # type: ignore[method-assign]
+
+        result = evaluator.evaluate(
+            query="What is RAG?",
+            retrieved_chunks=[{"text": "RAG uses retrieval."}],
+            generated_answer="RAG uses retrieval.",
+            reference_answer="RAG systems retrieve context before answering.",
+        )
+
+        assert result == expected
+        evaluator._run_ragas.assert_called_once_with(
+            "What is RAG?",
+            ["RAG uses retrieval."],
+            "RAG uses retrieval.",
+            "RAG systems retrieve context before answering.",
+        )
+
+    def test_run_ragas_scores_context_recall_with_reference(self) -> None:
+        from src.observability.evaluation.ragas_evaluator import RagasEvaluator
+
+        calls = []
+
+        class FakeResult:
+            value = 0.75
+
+        class FakeContextRecall:
+            def __init__(self, llm):
+                self.llm = llm
+
+            def score(self, **kwargs):
+                calls.append(kwargs)
+                return FakeResult()
+
+        evaluator = RagasEvaluator(metrics=["context_recall"])
+        evaluator._build_wrappers = MagicMock(return_value=(object(), object()))  # type: ignore[method-assign]
+
+        with patch("ragas.metrics.collections.ContextRecall", FakeContextRecall):
+            result = evaluator._run_ragas(
+                "What is RAG?",
+                ["RAG uses retrieval."],
+                "RAG uses retrieval.",
+                "Reference answer.",
+            )
+
+        assert result == {"context_recall": 0.75}
+        assert calls == [{
+            "user_input": "What is RAG?",
+            "retrieved_contexts": ["RAG uses retrieval."],
+            "reference": "Reference answer.",
+        }]
+
     def test_evaluate_runtime_error_on_ragas_failure(self) -> None:
         from src.observability.evaluation.ragas_evaluator import RagasEvaluator
 
@@ -215,6 +291,60 @@ class TestRagasEvaluatorEvaluate:
         )
 
         assert "faithfulness" in result
+
+
+class TestRagasEvaluatorWrappers:
+    """Tests for Ragas LLM and embedding wrapper construction."""
+
+    def test_build_wrappers_passes_openai_compatible_base_urls(self) -> None:
+        from src.observability.evaluation.ragas_evaluator import RagasEvaluator
+
+        created_clients = []
+
+        class FakeAsyncOpenAI:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                created_clients.append(kwargs)
+
+        class FakeOpenAIEmbeddings:
+            def __init__(self, model, client):
+                self.model = model
+                self.client = client
+
+        def fake_llm_factory(model, client, max_tokens):
+            return {"model": model, "client": client, "max_tokens": max_tokens}
+
+        settings = MagicMock()
+        settings.llm.provider = "openai"
+        settings.llm.model = "qwen-plus"
+        settings.llm.api_key = "llm-key"
+        settings.llm.base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        settings.llm.azure_endpoint = None
+        settings.embedding.provider = "openai"
+        settings.embedding.model = "text-embedding-v4"
+        settings.embedding.api_key = "embedding-key"
+        settings.embedding.base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        settings.embedding.azure_endpoint = None
+
+        evaluator = RagasEvaluator(settings=settings, metrics=["answer_relevancy"])
+
+        with (
+            patch("openai.AsyncOpenAI", FakeAsyncOpenAI),
+            patch("ragas.llms.llm_factory", fake_llm_factory),
+            patch("ragas.embeddings.OpenAIEmbeddings", FakeOpenAIEmbeddings),
+        ):
+            evaluator._build_wrappers()
+
+        assert created_clients == [
+            {
+                "api_key": "llm-key",
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            },
+            {
+                "api_key": "embedding-key",
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            },
+        ]
 
 
 class TestRagasEvaluatorFactory:
