@@ -84,11 +84,12 @@ answer_generation:
 # Evaluation Configuration
 # =============================================================================
 evaluation:
-  enabled: false
-  provider: "custom"  # Options: ragas, deepeval, custom
+  enabled: true
+  provider: "ragas"  # Options: ragas, custom
   metrics:
-    - "hit_rate"
-    - "mrr"
+    - "context_recall"
+    - "context_precision"
+    - "answer_relevancy"
     - "faithfulness"
 
 # =============================================================================

@@ -60,6 +60,8 @@ class MockLLMSettings:
     model: str = "gpt-4o-mini"
     temperature: float = 0.0
     max_tokens: int = 1024
+    api_key: str = None
+    base_url: str = None
 
 
 @dataclass
@@ -209,6 +211,20 @@ class TestOpenAILLM:
         settings = MockSettings()
         llm = OpenAILLM(settings, api_key="test-key", base_url="https://custom.api.com")
         assert llm.base_url == "https://custom.api.com"
+
+    def test_uses_settings_base_url(self):
+        """Should use OpenAI-compatible base URL from settings."""
+        settings = MockSettings(
+            llm=MockLLMSettings(
+                api_key="test-key",
+                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            )
+        )
+
+        llm = OpenAILLM(settings)
+
+        assert llm.base_url == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        assert llm._use_azure_auth is False
     
     def test_chat_success(self):
         """Should return ChatResponse on successful API call."""

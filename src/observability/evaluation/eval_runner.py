@@ -294,11 +294,16 @@ class EvalRunner:
 
         # Step 4: Evaluate
         try:
+            eval_kwargs: Dict[str, Any] = {}
+            if test_case.reference_answer:
+                eval_kwargs["reference_answer"] = test_case.reference_answer
+
             metrics = self.evaluator.evaluate(  # type: ignore[union-attr]
                 query=test_case.query,
                 retrieved_chunks=retrieved_chunks,
                 generated_answer=answer,
                 ground_truth=ground_truth,
+                **eval_kwargs,
             )
             qr.metrics = metrics
         except Exception as exc:
