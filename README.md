@@ -4,6 +4,34 @@
 
 这个仓库更偏向工程骨架和本地可运行原型：核心模块都通过抽象接口和工厂方法组织，便于替换 LLM、Embedding、Reranker、Vector Store 和 Evaluator。
 
+## 30 秒速览
+
+| 面试官关心的问题 | 简短回答 |
+| --- | --- |
+| 项目解决什么问题 | 让 AI 助手能够检索本地/私有文档后再回答，减少模型凭记忆编答案的问题。 |
+| 目标用户是谁 | 需要把私有文档、技术资料、PDF 知识库接入 Copilot、Claude、Cursor 等 AI 客户端的开发者或 RAG 学习者。 |
+| 核心流程是什么 | PDF 摄取 → 文档切块 → Chunk 增强 → Dense/BM25 建索引 → Hybrid Search → RRF 融合 → 可选 Rerank → MCP/CLI/Dashboard 返回结果。 |
+| 如何启动或看演示 | 先 `python scripts/ingest.py ...` 摄取文档，再用 `python scripts/query.py ... --verbose` 看检索链路，或 `python scripts/start_dashboard.py` 打开 Dashboard。 |
+| 如何评测 | 使用 `python scripts/evaluate.py` 跑 golden test set；也可以执行 `pytest`、`pytest tests/unit`、`pytest -m "not llm"` 验证工程质量。 |
+| 已知限制是什么 | 当前以本地原型为主，默认偏 PDF，本地 Chroma/BM25，生产级鉴权、多租户、远程部署、复杂表格/OCR 还需要继续扩展。 |
+
+## 最快演示路径
+
+```bash
+# 1. 安装依赖后，摄取一个 PDF
+python scripts/ingest.py --path tests/fixtures/sample_documents/simple.pdf --collection demo --force
+
+# 2. 查看 Dense / Sparse / Fusion / Rerank 中间结果
+python scripts/query.py --query "RAG 是什么" --collection demo --verbose
+
+# 3. 打开本地 Dashboard
+python scripts/start_dashboard.py
+
+# 4. 运行评估或测试
+python scripts/evaluate.py
+pytest -m "not llm"
+```
+
 ## Features
 
 - PDF 文档摄取：支持单文件或目录递归摄取，默认处理 PDF。
@@ -212,6 +240,21 @@ Dashboard 基于 Streamlit，面向本地调试和管理：
 
 Dashboard 和 CLI 使用同一套本地配置与数据目录。
 
+## Evaluation
+
+评测分两层：
+
+- 检索质量：`scripts/evaluate.py` 读取 golden test set，关注 Hit Rate、MRR 等指标，用来判断 Top-K 是否找到了正确 chunk，以及正确 chunk 是否排得靠前。
+- 工程回归：`pytest` 覆盖 unit、integration、e2e，验证配置加载、切块、检索、MCP 工具、Dashboard 服务和评估流程是否还能正常工作。
+
+常用命令：
+
+```bash
+python scripts/evaluate.py
+pytest
+pytest -m "not llm"
+```
+
 ## Testing
 
 运行全部测试：
@@ -274,6 +317,14 @@ ruff check .
 - Ingestion 写入 ChromaDB 和 BM25 两套索引，Query 阶段再做融合。
 - Trace 文件默认写入 `logs/traces.jsonl`，该目录不进入 Git。
 - `data/`、`logs/`、部分本地辅助目录、`.github/`、`DEV_SPEC.md` 均不纳入当前仓库提交范围。
+
+## Known Limitations
+
+- 当前项目定位是本地可运行原型和学习型工程骨架，不是开箱即用的生产 SaaS。
+- 默认文档摄取重点是 PDF；Word、HTML、Markdown、Excel、复杂表格和扫描件 OCR 需要继续扩展。
+- 默认使用本地 ChromaDB 和 BM25 索引；远程向量库、多租户隔离、鉴权和并发部署还未作为完整生产方案实现。
+- Rerank、Vision Caption、Ragas 等能力依赖外部模型或可选依赖，未配置时应关闭或使用 fallback。
+- 评估效果依赖 golden test set 质量；样例数据只能验证链路，不能代表真实业务效果。
 
 ## Roadmap
 
